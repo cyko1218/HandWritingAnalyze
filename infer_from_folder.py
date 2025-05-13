@@ -571,6 +571,8 @@ for bar in bars:
 plt.tight_layout()
 plt.show()
 
-# 요약 출력
+# 요약 출력1
 same_doc_count = sum(1 for r in results if r['is_same'])
 print(f"\n결과 요약: 총 {len(results)}개 참조 이미지 중 {same_doc_count}개가 테스트 이미지와 같은 문서로 판별됨")
+
+
