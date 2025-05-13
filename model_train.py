@@ -1,4 +1,4 @@
-# ✅ 최종 안정화 버전 - GPU(Metal) 비활성화 + CPU 학습용 train_model.py
+# ✅ 최종 안정화 버전 - 원본 해상도 (765x88) 사용
 
 import tensorflow as tf
 
@@ -12,7 +12,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from skimage.feature import hog
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Concatenate, Lambda
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, GlobalAveragePooling2D, Dense, Concatenate, Lambda
 from tensorflow.keras import backend as K
 import time
 from tqdm import tqdm
@@ -20,7 +20,7 @@ from tqdm import tqdm
 # ----------------------------
 # 설정
 # ----------------------------
-image_shape = (128, 128, 1)
+image_shape = (88, 765, 1)  # 원본 해상도
 handcrafted_dim = 9
 csv_path = "/Users/chanyoungko/Desktop/HandWriting/handwriting_pairs_train.csv"
 epochs = 10
@@ -42,7 +42,7 @@ def build_cnn_branch(input_shape):
     x = MaxPooling2D((2, 2))(x)
     x = Conv2D(64, (3, 3), activation='gelu', padding='same')(x)
     x = MaxPooling2D((2, 2))(x)
-    x = Flatten()(x)
+    x = GlobalAveragePooling2D()(x)  # Flatten 대신 사용
     x = Dense(128, activation='gelu')(x)
     return Model(inputs=input_img, outputs=x)
 
@@ -80,57 +80,45 @@ def build_siamese_model():
 # ----------------------------
 def extract_handcrafted_features(img):
     features = []
-
-    # ✅ 1. 전처리: uint8 + OTSU 이진화
     img_uint8 = img.astype(np.uint8)
     _, binary = cv2.threshold(img_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # ✅ 2. 필압 관련
-    features.append(np.mean(img) / 255.0)  # 평균 밝기 (진할수록 압력 높음)
-    features.append(np.std(img) / 255.0)  # 필압 변화량
+    features.append(np.mean(img) / 255.0)
+    features.append(np.std(img) / 255.0)
 
-    # ✅ 3. 획 개수 (윤곽선 수)
     edges = cv2.Canny(binary, 50, 150)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     features.append(len(contours) / 10.0)
 
-    # ✅ 4. 종횡비 (글씨 눌림/길쭉함)
     h, w = img.shape
     features.append(w / h)
 
-    # ✅ 5. 히스토그램 집중도 (밝기 분포 균일성)
     hist = cv2.calcHist([img_uint8], [0], None, [32], [0, 256])
     hist = hist / np.sum(hist)
     features.append(np.sum(hist ** 2))
 
-    # ✅ 6~7. 방향성: HOG 평균 & 표준편차
     hog_descriptor = hog(img_uint8, orientations=8, pixels_per_cell=(16, 16),
                          cells_per_block=(1, 1), visualize=False, feature_vector=True)
     features.append(np.mean(hog_descriptor))
     features.append(np.std(hog_descriptor))
 
-    # ✅ 8. 평균 기울기 (글씨 방향 추정)
     sobelx = cv2.Sobel(img_uint8, cv2.CV_64F, 1, 0, ksize=5)
     sobely = cv2.Sobel(img_uint8, cv2.CV_64F, 0, 1, ksize=5)
     angles = np.arctan2(sobely, sobelx)
-    avg_angle = np.mean(angles) / np.pi  # [-π, π] → [-1, 1] 정규화
+    avg_angle = np.mean(angles) / np.pi
     features.append(avg_angle)
 
-    # ✅ 9. 대비 특징 (안전한 계산 방식)
     pixel_range = np.max(img_uint8) - np.min(img_uint8)
-    contrast_feature = pixel_range / (np.mean(img_uint8) + 1)  # 0으로 나누기 방지
+    contrast_feature = pixel_range / (np.mean(img_uint8) + 1)
     features.append(contrast_feature)
 
-    # ✅ 정확히 9개 반환, 안전한 특징 처리
-    features = np.clip(features, -1, 1)  # 모든 특징을 [-1, 1] 범위로 제한
+    features = np.clip(features, -1, 1)
     return np.array(features, dtype=np.float32)
-
 
 def preprocess_image(path):
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return None
-    img = cv2.resize(img, (128, 128))
     return img.astype(np.float32)
 
 # ----------------------------
@@ -144,8 +132,8 @@ def load_and_train_model_verbose():
     hand1_list, hand2_list = [], []
     labels = []
 
-    print("🧪 이미지와 특징 추출 중...")
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="🔍 Loading Data"):
+    print("\U0001f9ea 이미지와 특징 추출 중...")
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="\U0001f50d Loading Data"):
         img1 = preprocess_image(row['image_path_1'])
         img2 = preprocess_image(row['image_path_2'])
         if img1 is None or img2 is None:
@@ -174,7 +162,7 @@ def load_and_train_model_verbose():
     model = build_siamese_model()
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-    print("🚀 모델 학습 시작...")
+    print("\U0001f680 모델 학습 시작...")
     training_start = time.time()
 
     history = model.fit(

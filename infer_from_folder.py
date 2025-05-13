@@ -395,31 +395,44 @@ def find_best_matches(similarity_matrix):
     return best_matches
 
 
-# -----------------------------------
-# 📌 STEP 9. 테스트 이미지와 참조 이미지들 비교
-# -----------------------------------
-# 임계값 설정
-threshold = 0.5
+# (이전 코드 생략)
 
-# 결과 저장을 위한 리스트
+# -----------------------------------
+# 📌 STEP 9. 테스트 이미지와 참조 이미지들 비교 (수정됨)
+# -----------------------------------
+
+def extract_pressure_slant_features(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img.copy()
+    binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+
+    # 필압 추정: 평균 밝기 (검은색에 가까울수록 필압이 진함)
+    pressure_score = np.mean(binary) / 255.0  # 0~1로 정규화
+
+    # 기울기 추정: Hough transform을 사용한 라인 기울기
+    edges = cv2.Canny(binary, 50, 150, apertureSize=3)
+    lines = cv2.HoughLines(edges, 1, np.pi / 180, 100)
+    if lines is not None:
+        angles = [(theta - np.pi / 2) for rho, theta in lines[:, 0]]
+        slant_score = np.mean(np.abs(angles)) / (np.pi / 4)  # 0~1 범위로 정규화
+    else:
+        slant_score = 0.0
+
+    return pressure_score, slant_score
+
+threshold = 0.5
 results = []
 
 for ref_path in reference_img_paths:
-    # 참조 이미지 로드
     ref_img = cv2.imread(ref_path)
     if ref_img is None:
         print(f"⚠️ 참조 이미지를 로드할 수 없습니다: {ref_path}")
         continue
 
-    # 테스트 이미지 로드
     test_img = cv2.imread(test_img_path)
     if test_img is None:
         print(f"❌ 테스트 이미지를 로드할 수 없습니다: {test_img_path}")
         exit(1)
 
-    # 이미지에서 줄 추출
-    #test_lines = extract_lines_from_image(test_img)
-    #ref_lines = extract_lines_from_image(ref_img)
     test_lines = extract_lines_with_ocr(test_img)
     ref_lines = extract_lines_with_ocr(ref_img)
 
@@ -431,30 +444,31 @@ for ref_path in reference_img_paths:
         print("⚠️ 줄을 추출할 수 없습니다.")
         continue
 
-    # 각 줄 비교하여 유사도 행렬 생성
     similarity_matrix = compare_lines(test_lines, ref_lines)
-
-    # 전체 유사도 평균 계산
     avg_similarity = np.mean(similarity_matrix)
-    # 각 테스트 줄의 최고 유사도 평균 계산
     best_match_avg = np.mean([np.max(similarity_matrix[i]) for i in range(similarity_matrix.shape[0])])
 
-    # 결과 기록
-    is_same = best_match_avg > 0.5  # 유사도 기준값 0.3
+    # 필압/기울기 평균 계산
+    pressure_scores = []
+    slant_scores = []
+    for line in test_lines + ref_lines:
+        pressure, slant = extract_pressure_slant_features(line)
+        pressure_scores.append(pressure)
+        slant_scores.append(slant)
+    avg_pressure = np.mean(pressure_scores)
+    avg_slant = np.mean(slant_scores)
+
+    is_same = avg_similarity > 0.5
     result = "같은 문서" if is_same else "다른 문서"
 
-    print(f"줄 매칭 평균 유사도: {best_match_avg:.4f}")
-    print(f"전체 유사도 평균: {avg_similarity:.4f}")
-    print(f"판정 결과: {result}")
-
-    # 가장 좋은 매칭 찾기
     best_matches = find_best_matches(similarity_matrix)
 
-    # 결과 저장
     results.append({
         'reference_image': os.path.basename(ref_path),
         'avg_similarity': avg_similarity,
         'best_match_avg': best_match_avg,
+        'avg_pressure': avg_pressure,
+        'avg_slant': avg_slant,
         'result': result,
         'is_same': is_same,
         'similarity_matrix': similarity_matrix,
@@ -464,28 +478,36 @@ for ref_path in reference_img_paths:
         'best_matches': best_matches
     })
 
-# 결과를 유사도순으로 정렬
 results.sort(key=lambda x: x['best_match_avg'], reverse=True)
 
+
+# (기존 코드 생략)
+
 # -----------------------------------
-# 📌 STEP 10. 결과 시각화
+# 표준 결과 출력의 % 형식 표시로 수정
 # -----------------------------------
 # 결과가 없는 경우 처리
 if not results:
     print("❌ 비교할 결과가 없습니다.")
     exit(1)
 
-# 결과 시각화를 위한 설정
-plt.figure(figsize=(15, 10))
-
-# 상위 결과 표시
+# 결과 변수 설정 및 % 계산
 best_result = results[0]
+similarity_percent = best_result['avg_similarity'] * 100
+pressure_percent = best_result['avg_pressure'] * 100
+slant_percent = best_result['avg_slant'] * 100
+best_match_percent = best_result['best_match_avg'] * 100
+
+# 결과 출력
 print(f"\n🏆 최고 유사도 결과: {best_result['reference_image']}")
-print(f"줄 매칭 평균 유사도: {best_result['best_match_avg']:.4f}")
-print(f"전체 유사도 평균: {best_result['avg_similarity']:.4f}")
+print(f"줄 매칭 평균 유사도: {best_match_percent:.2f}%")
+print(f"전체 유사도 평균: {similarity_percent:.2f}%")
+print(f"평균 필압(Pressure): {pressure_percent:.2f}%")
+print(f"평균 기울기(Slant): {slant_percent:.2f}%")
 print(f"판정 결과: {best_result['result']}")
 
-# 히트맵으로 유사도 행렬 시각화
+# 히트맵 + 테스트/참조 이미지 시각화
+plt.figure(figsize=(15, 10))
 plt.subplot(2, 2, 1)
 plt.imshow(best_result['similarity_matrix'], cmap='viridis', aspect='auto')
 plt.colorbar(label='Similarity')
@@ -493,7 +515,6 @@ plt.title(f"Line Similarity Matrix: {best_result['reference_image']}")
 plt.xlabel('Reference Lines')
 plt.ylabel('Test Lines')
 
-# 테스트 이미지 표시
 plt.subplot(2, 2, 2)
 if len(test_img.shape) == 3:
     plt.imshow(cv2.cvtColor(test_img, cv2.COLOR_BGR2RGB))
@@ -502,7 +523,6 @@ else:
 plt.title("Test Image")
 plt.axis('off')
 
-# 참조 이미지 표시
 plt.subplot(2, 2, 3)
 if len(best_result['ref_img'].shape) == 3:
     plt.imshow(cv2.cvtColor(best_result['ref_img'], cv2.COLOR_BGR2RGB))
@@ -511,47 +531,46 @@ else:
 plt.title(f"Reference Image: {best_result['reference_image']}")
 plt.axis('off')
 
-# 가장 유사한 줄 매칭 시각화
 plt.subplot(2, 2, 4)
-plt.text(0.5, 0.5, f"Best Match Average: {best_result['best_match_avg']:.4f}\nResult: {best_result['result']}",
+plt.text(0.5, 0.5,
+         f"Best Match Average: {best_match_percent:.2f}%\nSimilarity: {similarity_percent:.2f}%\nPressure: {pressure_percent:.2f}%\nSlant: {slant_percent:.2f}%\nResult: {best_result['result']}",
          horizontalalignment='center', verticalalignment='center', fontsize=12)
 plt.axis('off')
-if best_result['is_same']:
-    plt.gca().set_facecolor((0.9, 1, 0.9))  # 연한 녹색
-else:
-    plt.gca().set_facecolor((1, 0.9, 0.9))  # 연한 빨간색
-
+plt.gca().set_facecolor((0.9, 1, 0.9) if best_result['is_same'] else (1, 0.9, 0.9))
 plt.tight_layout()
 
-# 매칭된 줄 시각화
+# 줄 매칭 시각화
 num_matches = min(5, len(best_result['best_matches']))
 plt.figure(figsize=(15, 3 * num_matches))
-
 for i in range(num_matches):
     match = best_result['best_matches'][i]
     test_idx, ref_idx, similarity = match
 
-    # 테스트 줄 이미지
     plt.subplot(num_matches, 2, i * 2 + 1)
     plt.imshow(best_result['test_lines'][test_idx], cmap='gray')
     plt.title(f"Test Line {test_idx + 1}")
     plt.axis('off')
 
-    # 매칭된 참조 줄 이미지
     plt.subplot(num_matches, 2, i * 2 + 2)
     plt.imshow(best_result['ref_lines'][ref_idx], cmap='gray')
-    plt.title(f"Matched Ref Line {ref_idx + 1} (Similarity: {similarity:.4f})")
+    plt.title(f"Matched Ref Line {ref_idx + 1} (Similarity: {similarity * 100:.2f}%)")
     plt.axis('off')
+plt.tight_layout()
 
+# 유사도/필압/기울기 % 그래프
+plt.figure(figsize=(6, 4))
+metrics = ['Similarity', 'Pressure', 'Slant']
+values = [similarity_percent, pressure_percent, slant_percent]
+bars = plt.bar(metrics, values)
+plt.ylim(0, 100)
+plt.title('평균 유사도 / 필압 / 기울기 (%)')
+for bar in bars:
+    height = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width() / 2, height + 1,
+             f"{height:.1f}%", ha='center', va='bottom')
 plt.tight_layout()
 plt.show()
 
-# 종합 결과 출력
+# 요약 출력
 same_doc_count = sum(1 for r in results if r['is_same'])
 print(f"\n결과 요약: 총 {len(results)}개 참조 이미지 중 {same_doc_count}개가 테스트 이미지와 같은 문서로 판별됨")
-
-# 가장 유사한 참조 이미지 결과
-if results:
-    best_match = results[0]
-    print(
-        f"가장 유사한 참조 이미지: {best_match['reference_image']} (유사도: {best_match['best_match_avg']:.4f}, 결과: {best_match['result']})")
