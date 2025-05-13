@@ -436,7 +436,7 @@ class HandwritingAnalyzer:
 # 사용 예시
 if __name__ == "__main__":
     # 파일 경로를 실제 이미지 파일로 변경하세요
-    analyzer = HandwritingAnalyzer("//Users/chanyoungko/Desktop/HandWriting/analyze_image/스크린샷 2025-04-28 오후 9.28.06.png")
+    analyzer = HandwritingAnalyzer("/Users/chanyoungko/Desktop/HandWriting/analyze_image/스크린샷 2025-05-02 오후 5.36.50.png")
     analyzer.analyze()
 
     # 결과 출력

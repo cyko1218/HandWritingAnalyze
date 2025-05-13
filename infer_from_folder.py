@@ -10,6 +10,10 @@ import os
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, TimeDistributed, Conv1D, BatchNormalization, LSTM, Dense, Lambda, Reshape
 from tensorflow.keras import backend as K
+from scipy.spatial.distance import cdist
+import math
+import pytesseract
+from pytesseract import Output
 
 # -----------------------------------
 # 📌 STEP 1. 한글 폰트 설정
@@ -114,7 +118,122 @@ if not os.path.exists(model_path):
 
 
 # -----------------------------------
-# 📌 STEP 3. 이미지 → 시계열 feature 추출
+# 📌 STEP 3. 이미지 줄 추출 함수
+# -----------------------------------
+def extract_lines_from_image(img):
+    # 이미지가 컬러인 경우 그레이스케일로 변환
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 이미지 이진화 (적응형 임계값 사용)
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+
+    # 수평 투영 프로필 계산
+    h_proj = np.sum(binary, axis=1)
+
+    # 줄 경계 찾기
+    line_boundaries = []
+    in_line = False
+    line_start = 0
+
+    # 최소 줄 높이 (노이즈 필터링 용)
+    min_line_height = img.shape[0] * 0.02  # 이미지 높이의 2%
+
+    for i, proj in enumerate(h_proj):
+        if not in_line and proj > 0:
+            # 줄 시작
+            in_line = True
+            line_start = i
+        elif in_line and (proj == 0 or i == len(h_proj) - 1):
+            # 줄 끝
+            in_line = False
+            line_end = i
+
+            # 최소 높이보다 큰 줄만 저장
+            if line_end - line_start > min_line_height:
+                line_boundaries.append((line_start, line_end))
+
+    # 원본 이미지에서 줄 추출
+    lines = []
+    for start, end in line_boundaries:
+        # 약간의 여백을 추가하여 줄 추출
+        padding = 5
+        start_padded = max(0, start - padding)
+        end_padded = min(img.shape[0], end + padding)
+
+        line_img = img[start_padded:end_padded, :]
+        lines.append(line_img)
+
+    return lines
+
+
+
+def extract_lines_with_ocr(img):
+    """
+    개선된 Tesseract OCR 기반 줄 추출 함수:
+    - 빨간 테두리 제거
+    - 줄 단위 인식 강화 (psm 6)
+    - 줄별 bounding box로 잘라내기
+    """
+    # 1. 빨간 테두리 제거
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        mask_red = cv2.inRange(hsv, (0, 70, 50), (10, 255, 255)) + \
+                   cv2.inRange(hsv, (170, 70, 50), (180, 255, 255))
+        img[mask_red > 0] = (255, 255, 255)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img.copy()
+
+    # 2. Tesseract OCR로 줄 단위 인식
+    custom_config = r'--psm 6'
+    ocr_data = pytesseract.image_to_data(gray, config=custom_config, output_type=Output.DICT)
+
+    lines = []
+    last_line_num = -1
+    line_group = []
+
+    for i in range(len(ocr_data['text'])):
+        text = ocr_data['text'][i].strip()
+        line_num = ocr_data['line_num'][i]
+
+        if text == '':
+            continue
+
+        x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
+
+        if line_num == last_line_num:
+            line_group.append((x, y, w, h))
+        else:
+            if line_group:
+                lines.append(line_group)
+            line_group = [(x, y, w, h)]
+            last_line_num = line_num
+
+    if line_group:
+        lines.append(line_group)
+
+    # 3. 각 줄 영역을 잘라서 반환
+    line_images = []
+    for group in lines:
+        xs = [x for x, y, w, h in group]
+        ys = [y for x, y, w, h in group]
+        ws = [w for x, y, w, h in group]
+        hs = [h for x, y, w, h in group]
+
+        x_min = max(0, min(xs) - 5)
+        y_min = max(0, min(ys) - 5)
+        x_max = min(gray.shape[1], max(x + w for x, w in zip(xs, ws)) + 5)
+        y_max = min(gray.shape[0], max(y + h for y, h in zip(ys, hs)) + 5)
+
+        line_img = gray[y_min:y_max, x_min:x_max]
+        line_images.append(line_img)
+
+    return line_images
+
+
+# -----------------------------------
+# 📌 STEP 4. 이미지 → 시계열 feature 추출
 # -----------------------------------
 def extract_features_from_image(img):
     # 이미지가 컬러인 경우 그레이스케일로 변환
@@ -173,7 +292,7 @@ def extract_features_from_image(img):
 
 
 # -----------------------------------
-# 📌 STEP 4. Siamese 모델 정의
+# 📌 STEP 5. Siamese 모델 정의
 # -----------------------------------
 def euclidean_distance(vects):
     x, y = vects
@@ -216,7 +335,7 @@ def create_full_model(input_shape):
 
 
 # -----------------------------------
-# 📌 STEP 5. 모델 생성 및 가중치 로딩
+# 📌 STEP 6. 모델 생성 및 가중치 로딩
 # -----------------------------------
 input_shape = (150, 24, 1)
 model = create_full_model(input_shape)
@@ -229,24 +348,62 @@ except Exception as e:
     print(f"❌ 모델 가중치 로드 실패: {e}")
     exit(1)
 
-# -----------------------------------
-# 📌 STEP 6. 테스트 이미지와 참조 이미지들 비교
-# -----------------------------------
-# 테스트 이미지 로드 및 특성 추출
-test_img = cv2.imread(test_img_path)
-if test_img is None:
-    print(f"❌ 테스트 이미지를 로드할 수 없습니다: {test_img_path}")
-    exit(1)
 
-test_feat = np.expand_dims(extract_features_from_image(test_img), axis=0)  # (1, 150, 24, 1)
+# -----------------------------------
+# 📌 STEP 7. 줄 별 비교 함수
+# -----------------------------------
+def compare_lines(test_lines, ref_lines, threshold=0.2):
+    """
+    테스트 이미지의 각 줄과 참조 이미지의 각 줄을 비교하여 유사도 행렬 생성
+    """
+    similarity_matrix = np.zeros((len(test_lines), len(ref_lines)))
 
+    for i, test_line in enumerate(test_lines):
+        # 테스트 줄의 특성 추출
+        test_feat = np.expand_dims(extract_features_from_image(test_line), axis=0)
+
+        for j, ref_line in enumerate(ref_lines):
+            # 참조 줄의 특성 추출
+            ref_feat = np.expand_dims(extract_features_from_image(ref_line), axis=0)
+
+            # 거리 계산
+            distance = model.predict([test_feat, ref_feat], verbose=0)[0][0]
+
+            # 거리를 유사도로 변환 (거리가 작을수록 유사도가 높음)
+            # 거리가 0이면 완전히 일치, 거리가 클수록 차이가 커짐
+            # 유사도를 0~1 사이로 정규화 (0: 완전히 다름, 1: 완전히 일치)
+            similarity = math.exp(-distance * 5)  # 지수 함수를 사용해 0~1 범위로 매핑
+            similarity_matrix[i, j] = similarity
+
+    return similarity_matrix
+
+
+# -----------------------------------
+# 📌 STEP 8. 유사도 행렬 기반 매칭 수행
+# -----------------------------------
+def find_best_matches(similarity_matrix):
+    """
+    유사도 행렬에서 각 테스트 줄에 대한 가장 유사한 참조 줄 찾기
+    """
+    best_matches = []
+    # 각 테스트 줄에 대해 최고 유사도와 해당 참조 줄 인덱스 찾기
+    for i in range(similarity_matrix.shape[0]):
+        best_ref_idx = np.argmax(similarity_matrix[i])
+        best_similarity = similarity_matrix[i, best_ref_idx]
+        best_matches.append((i, best_ref_idx, best_similarity))
+
+    return best_matches
+
+
+# -----------------------------------
+# 📌 STEP 9. 테스트 이미지와 참조 이미지들 비교
+# -----------------------------------
 # 임계값 설정
-threshold = 0.2
+threshold = 0.5
 
 # 결과 저장을 위한 리스트
 results = []
 
-# 각 참조 이미지와 비교
 for ref_path in reference_img_paths:
     # 참조 이미지 로드
     ref_img = cv2.imread(ref_path)
@@ -254,89 +411,147 @@ for ref_path in reference_img_paths:
         print(f"⚠️ 참조 이미지를 로드할 수 없습니다: {ref_path}")
         continue
 
-    # 특성 추출
-    ref_feat = np.expand_dims(extract_features_from_image(ref_img), axis=0)
+    # 테스트 이미지 로드
+    test_img = cv2.imread(test_img_path)
+    if test_img is None:
+        print(f"❌ 테스트 이미지를 로드할 수 없습니다: {test_img_path}")
+        exit(1)
 
-    # 거리 계산
-    distance = model.predict([test_feat, ref_feat], verbose=0)[0][0]
+    # 이미지에서 줄 추출
+    #test_lines = extract_lines_from_image(test_img)
+    #ref_lines = extract_lines_from_image(ref_img)
+    test_lines = extract_lines_with_ocr(test_img)
+    ref_lines = extract_lines_with_ocr(ref_img)
 
-    # 같은 사람인지 판별
-    is_same = distance < threshold
-    result = "같은 사람" if is_same else "다른 사람"
+    print(f"\n참조 이미지 '{os.path.basename(ref_path)}' 분석 중...")
+    print(f"테스트 이미지에서 추출한 줄 수: {len(test_lines)}")
+    print(f"참조 이미지에서 추출한 줄 수: {len(ref_lines)}")
+
+    if len(test_lines) == 0 or len(ref_lines) == 0:
+        print("⚠️ 줄을 추출할 수 없습니다.")
+        continue
+
+    # 각 줄 비교하여 유사도 행렬 생성
+    similarity_matrix = compare_lines(test_lines, ref_lines)
+
+    # 전체 유사도 평균 계산
+    avg_similarity = np.mean(similarity_matrix)
+    # 각 테스트 줄의 최고 유사도 평균 계산
+    best_match_avg = np.mean([np.max(similarity_matrix[i]) for i in range(similarity_matrix.shape[0])])
+
+    # 결과 기록
+    is_same = best_match_avg > 0.5  # 유사도 기준값 0.3
+    result = "같은 문서" if is_same else "다른 문서"
+
+    print(f"줄 매칭 평균 유사도: {best_match_avg:.4f}")
+    print(f"전체 유사도 평균: {avg_similarity:.4f}")
+    print(f"판정 결과: {result}")
+
+    # 가장 좋은 매칭 찾기
+    best_matches = find_best_matches(similarity_matrix)
 
     # 결과 저장
     results.append({
         'reference_image': os.path.basename(ref_path),
-        'distance': distance,
+        'avg_similarity': avg_similarity,
+        'best_match_avg': best_match_avg,
         'result': result,
         'is_same': is_same,
-        'ref_img': ref_img if len(ref_img.shape) == 2 else cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
+        'similarity_matrix': similarity_matrix,
+        'ref_img': ref_img,
+        'test_lines': test_lines,
+        'ref_lines': ref_lines,
+        'best_matches': best_matches
     })
 
-    print(f"참조 이미지 '{os.path.basename(ref_path)}' 비교 결과: 거리={distance:.4f}, {result}")
-
-# 결과를 거리순으로 정렬
-results.sort(key=lambda x: x['distance'])
+# 결과를 유사도순으로 정렬
+results.sort(key=lambda x: x['best_match_avg'], reverse=True)
 
 # -----------------------------------
-# 📌 STEP 7. 결과 시각화
+# 📌 STEP 10. 결과 시각화
 # -----------------------------------
 # 결과가 없는 경우 처리
 if not results:
     print("❌ 비교할 결과가 없습니다.")
     exit(1)
 
-# 테스트 이미지를 그레이스케일로 변환
+# 결과 시각화를 위한 설정
+plt.figure(figsize=(15, 10))
+
+# 상위 결과 표시
+best_result = results[0]
+print(f"\n🏆 최고 유사도 결과: {best_result['reference_image']}")
+print(f"줄 매칭 평균 유사도: {best_result['best_match_avg']:.4f}")
+print(f"전체 유사도 평균: {best_result['avg_similarity']:.4f}")
+print(f"판정 결과: {best_result['result']}")
+
+# 히트맵으로 유사도 행렬 시각화
+plt.subplot(2, 2, 1)
+plt.imshow(best_result['similarity_matrix'], cmap='viridis', aspect='auto')
+plt.colorbar(label='Similarity')
+plt.title(f"Line Similarity Matrix: {best_result['reference_image']}")
+plt.xlabel('Reference Lines')
+plt.ylabel('Test Lines')
+
+# 테스트 이미지 표시
+plt.subplot(2, 2, 2)
 if len(test_img.shape) == 3:
-    test_img_gray = cv2.cvtColor(test_img, cv2.COLOR_BGR2GRAY)
+    plt.imshow(cv2.cvtColor(test_img, cv2.COLOR_BGR2RGB))
 else:
-    test_img_gray = test_img
-
-# 상위 5개 또는 전체 결과 (더 적은 쪽) 표시
-display_count = min(5, len(results))
-
-plt.figure(figsize=(15, 3 * display_count))
-
-# 테스트 이미지 (항상 왼쪽에 표시)
-plt.subplot(display_count, 3, 1)
-plt.imshow(test_img_gray, cmap='gray')
-plt.title("Test Image", fontsize=12)  # 영어로 표시하여 폰트 문제 회피
+    plt.imshow(test_img, cmap='gray')
+plt.title("Test Image")
 plt.axis('off')
 
-# 각 참조 이미지 및 결과 표시
-for i in range(display_count):
-    result = results[i]
+# 참조 이미지 표시
+plt.subplot(2, 2, 3)
+if len(best_result['ref_img'].shape) == 3:
+    plt.imshow(cv2.cvtColor(best_result['ref_img'], cv2.COLOR_BGR2RGB))
+else:
+    plt.imshow(best_result['ref_img'], cmap='gray')
+plt.title(f"Reference Image: {best_result['reference_image']}")
+plt.axis('off')
 
-    # 참조 이미지
-    plt.subplot(display_count, 3, i * 3 + 2)
-    plt.imshow(result['ref_img'], cmap='gray')
-    plt.title(f"Reference: {result['reference_image']}", fontsize=10)  # 영어로 표시
+# 가장 유사한 줄 매칭 시각화
+plt.subplot(2, 2, 4)
+plt.text(0.5, 0.5, f"Best Match Average: {best_result['best_match_avg']:.4f}\nResult: {best_result['result']}",
+         horizontalalignment='center', verticalalignment='center', fontsize=12)
+plt.axis('off')
+if best_result['is_same']:
+    plt.gca().set_facecolor((0.9, 1, 0.9))  # 연한 녹색
+else:
+    plt.gca().set_facecolor((1, 0.9, 0.9))  # 연한 빨간색
+
+plt.tight_layout()
+
+# 매칭된 줄 시각화
+num_matches = min(5, len(best_result['best_matches']))
+plt.figure(figsize=(15, 3 * num_matches))
+
+for i in range(num_matches):
+    match = best_result['best_matches'][i]
+    test_idx, ref_idx, similarity = match
+
+    # 테스트 줄 이미지
+    plt.subplot(num_matches, 2, i * 2 + 1)
+    plt.imshow(best_result['test_lines'][test_idx], cmap='gray')
+    plt.title(f"Test Line {test_idx + 1}")
     plt.axis('off')
 
-    # 결과 텍스트
-    plt.subplot(display_count, 3, i * 3 + 3)
-    result_text = f"Distance: {result['distance']:.4f}\nResult: "
-    result_text += "Same Person" if result['is_same'] else "Different Person"  # 영어로 표시
-
-    plt.text(0.5, 0.5, result_text,
-             horizontalalignment='center', verticalalignment='center', fontsize=12)
+    # 매칭된 참조 줄 이미지
+    plt.subplot(num_matches, 2, i * 2 + 2)
+    plt.imshow(best_result['ref_lines'][ref_idx], cmap='gray')
+    plt.title(f"Matched Ref Line {ref_idx + 1} (Similarity: {similarity:.4f})")
     plt.axis('off')
-
-    # 배경색 설정 (같은 사람이면 연한 녹색, 다른 사람이면 연한 빨간색)
-    if result['is_same']:
-        plt.gca().set_facecolor((0.9, 1, 0.9))  # 연한 녹색
-    else:
-        plt.gca().set_facecolor((1, 0.9, 0.9))  # 연한 빨간색
 
 plt.tight_layout()
 plt.show()
 
 # 종합 결과 출력
-same_person_count = sum(1 for r in results if r['is_same'])
-print(f"\n결과 요약: 총 {len(results)}개 참조 이미지 중 {same_person_count}개가 테스트 이미지와 같은 사람으로 판별됨")
+same_doc_count = sum(1 for r in results if r['is_same'])
+print(f"\n결과 요약: 총 {len(results)}개 참조 이미지 중 {same_doc_count}개가 테스트 이미지와 같은 문서로 판별됨")
 
 # 가장 유사한 참조 이미지 결과
 if results:
     best_match = results[0]
     print(
-        f"가장 유사한 참조 이미지: {best_match['reference_image']} (거리: {best_match['distance']:.4f}, 결과: {best_match['result']})")
+        f"가장 유사한 참조 이미지: {best_match['reference_image']} (유사도: {best_match['best_match_avg']:.4f}, 결과: {best_match['result']})")
