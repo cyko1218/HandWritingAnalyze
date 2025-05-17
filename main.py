@@ -1,122 +1,141 @@
-import numpy as np
+# ✅ 줄 단위 필기체 비교 및 시각화 시스템 (keras 모델 기반)
+
+import os
 import cv2
+import numpy as np
+import math
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from tensorflow.keras.models import load_model
-from tensorflow.keras import backend as K
 from skimage.feature import hog
+from tensorflow.keras import backend as K
 
 # ----------------------------
 # 설정
 # ----------------------------
-image_shape = (128, 128)
+model_path = "siamese_handcrafted_model_memory.keras"
+reference_dir = "reference_samples"
+test_dir = "test_samples"
+
+image_shape = (88, 765)
 handcrafted_dim = 9
-threshold = 0.5  # 조정 가능
 
 # ----------------------------
-# 유클리드 거리 함수
+# 유사도 변환 함수
 # ----------------------------
 def euclidean_distance(vects):
     x, y = vects
     return K.sqrt(K.sum(K.square(x - y), axis=1, keepdims=True))
 
-# ----------------------------
-# 모델 로드
-# ----------------------------
-model_path = "/Users/chanyoungko/Desktop/HandWriting/model/siamese_handcrafted_model.h5"
-model = load_model(model_path, custom_objects={'euclidean_distance': euclidean_distance})
+def distance_to_similarity(distance, factor=5):
+    return math.exp(-distance * factor)
 
 # ----------------------------
-# 이미지 전처리 및 특징 추출
+# handcrafted 특성 추출
 # ----------------------------
-def preprocess_image(path):
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError(f"이미지를 불러올 수 없습니다: {path}")
-    img = cv2.resize(img, (image_shape[1], image_shape[0]))
-    return img.astype(np.float32)
-
 def extract_handcrafted_features(img):
-    features = []
     img_uint8 = img.astype(np.uint8)
     _, binary = cv2.threshold(img_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    features.append(np.mean(img) / 255.0)
-    features.append(np.std(img) / 255.0)
-
-    edges = cv2.Canny(binary, 50, 150)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    features.append(len(contours) / 10.0)
-
-    h, w = img.shape
-    features.append(w / h)
-
-    hist = cv2.calcHist([img_uint8], [0], None, [32], [0, 256])
-    hist = hist / np.sum(hist)
-    features.append(np.sum(hist ** 2))
-
-    hog_descriptor = hog(img_uint8, orientations=8, pixels_per_cell=(16, 16),
-                         cells_per_block=(1, 1), visualize=False, feature_vector=True)
-    features.append(np.mean(hog_descriptor))
-    features.append(np.std(hog_descriptor))
-
-    sobelx = cv2.Sobel(img_uint8, cv2.CV_64F, 1, 0, ksize=5)
-    sobely = cv2.Sobel(img_uint8, cv2.CV_64F, 0, 1, ksize=5)
-    angles = np.arctan2(sobely, sobelx)
-    avg_angle = np.mean(angles) / np.pi
-    features.append(avg_angle)
-
-    pixel_range = np.max(img_uint8) - np.min(img_uint8)
-    contrast_feature = pixel_range / (np.mean(img_uint8) + 1)
-    features.append(contrast_feature)
-
-    features = np.clip(features, -1, 1)
-    return np.array(features, dtype=np.float32)
+    features = [
+        np.mean(img) / 255.0,
+        np.std(img) / 255.0
+    ]
+    hog_feat = hog(binary, pixels_per_cell=(8, 8), cells_per_block=(2, 2), visualize=False, feature_vector=True)
+    hog_feat = hog_feat[:7] if len(hog_feat) >= 7 else np.pad(hog_feat, (0, 7 - len(hog_feat)))
+    features.extend(hog_feat)
+    return np.array(features[:9], dtype=np.float32)
 
 # ----------------------------
-# 비교 및 시각화 함수
+# 이미지 줄 추출 (수평 프로젝션)
 # ----------------------------
-def compare_images(path1, path2):
-    img1 = preprocess_image(path1)
-    img2 = preprocess_image(path2)
-    hand1 = extract_handcrafted_features(img1)
-    hand2 = extract_handcrafted_features(img2)
+def extract_lines_from_image(img):
+    if len(img.shape) == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    h_proj = np.sum(binary, axis=1)
 
-    img1_input = np.expand_dims(img1 / 255.0, axis=(0, -1))
-    img2_input = np.expand_dims(img2 / 255.0, axis=(0, -1))
-    hand1_input = np.expand_dims(hand1, axis=0)
-    hand2_input = np.expand_dims(hand2, axis=0)
+    lines = []
+    in_line = False
+    start = 0
+    for i, val in enumerate(h_proj):
+        if val > 0 and not in_line:
+            start = i
+            in_line = True
+        elif val == 0 and in_line:
+            end = i
+            if end - start > 5:
+                lines.append(img[max(0, start - 5):min(img.shape[0], end + 5), :])
+            in_line = False
+    return lines
 
-    distance = model.predict([img1_input, hand1_input, img2_input, hand2_input])[0][0]
-    similarity = 1 / (1 + distance)
+# ----------------------------
+# 줄 단위 유사도 비교 함수
+# ----------------------------
+def compare_lines_with_model(model, test_lines, ref_lines):
+    sim_matrix = np.zeros((len(test_lines), len(ref_lines)))
+    for i, test in enumerate(test_lines):
+        test_img = cv2.resize(test, image_shape).astype(np.float32) / 255.0
+        test_hand = extract_handcrafted_features(test * 255.0)
+        test_input_img = np.expand_dims(test_img[..., np.newaxis], axis=0)
+        test_input_hand = np.expand_dims(test_hand, axis=0)
 
-    # --- 출력 ---
-    print("📏 유클리드 거리:", f"{distance:.4f}")
-    print("🔍 유사도 (1/(1+d)):", f"{similarity:.4f}")
-    print("🎯 threshold 기준값:", threshold)
-    if distance < threshold:
-        result = "✅ 같은 사람일 가능성이 높습니다."
-    else:
-        result = "❌ 다른 사람일 가능성이 높습니다."
-    print("📢 판별 결과:", result)
+        for j, ref in enumerate(ref_lines):
+            ref_img = cv2.resize(ref, image_shape).astype(np.float32) / 255.0
+            ref_hand = extract_handcrafted_features(ref * 255.0)
+            ref_input_img = np.expand_dims(ref_img[..., np.newaxis], axis=0)
+            ref_input_hand = np.expand_dims(ref_hand, axis=0)
 
-    # --- 시각화 ---
-    fig, axes = plt.subplots(1, 2, figsize=(12, 3))
-    axes[0].imshow(img1, cmap='gray')
-    axes[0].set_title("Image 1")
-    axes[0].axis('off')
+            distance = model.predict([test_input_img, test_input_hand, ref_input_img, ref_input_hand], verbose=0)[0][0]
+            sim_matrix[i, j] = distance_to_similarity(distance)
+    return sim_matrix
 
-    axes[1].imshow(img2, cmap='gray')
-    axes[1].set_title("Image 2")
-    axes[1].axis('off')
+# ----------------------------
+# 시각화 함수
+# ----------------------------
+def visualize_similarity(test_img, ref_img, similarity_matrix, test_lines, ref_lines):
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 3, 1)
+    plt.imshow(test_img, cmap='gray')
+    plt.title("Test Image")
+    plt.axis('off')
 
-    plt.suptitle(f"📏 Distance: {distance:.4f} | 🔍 Similarity: {similarity:.4f}\n🎯 Threshold: {threshold} → {result}", fontsize=12)
+    plt.subplot(1, 3, 2)
+    plt.imshow(ref_img, cmap='gray')
+    plt.title("Reference Image")
+    plt.axis('off')
+
+    plt.subplot(1, 3, 3)
+    plt.imshow(similarity_matrix, cmap='viridis', aspect='auto')
+    plt.colorbar(label='Similarity')
+    plt.title("Line Similarity Matrix")
+    plt.xlabel("Reference Lines")
+    plt.ylabel("Test Lines")
     plt.tight_layout()
     plt.show()
 
 # ----------------------------
-# 실행 예시
+# 실행
 # ----------------------------
+def run_compare():
+    # 모델 로드
+    model = load_model(model_path, custom_objects={"euclidean_distance": euclidean_distance})
+
+    test_files = [os.path.join(test_dir, f) for f in os.listdir(test_dir) if f.endswith(('png', 'jpg', 'jpeg'))]
+    ref_files = [os.path.join(reference_dir, f) for f in os.listdir(reference_dir) if f.endswith(('png', 'jpg', 'jpeg'))]
+
+    test_path = test_files[0]
+    test_img = cv2.imread(test_path, cv2.IMREAD_GRAYSCALE)
+    test_lines = extract_lines_from_image(test_img)
+
+    for ref_path in ref_files:
+        ref_img = cv2.imread(ref_path, cv2.IMREAD_GRAYSCALE)
+        ref_lines = extract_lines_from_image(ref_img)
+
+        sim_matrix = compare_lines_with_model(model, test_lines, ref_lines)
+        avg_sim = np.mean(sim_matrix)
+        print(f"\n📄 참조 문서: {os.path.basename(ref_path)}")
+        print(f"평균 유사도: {avg_sim:.4f}")
+        visualize_similarity(test_img, ref_img, sim_matrix, test_lines, ref_lines)
+
 if __name__ == "__main__":
-    path1 = "/Users/chanyoungko/Desktop/HandWriting/reference_samples/스크린샷 2025-05-13 오후 12.53.49.png"
-    path2 = "/Users/chanyoungko/Desktop/HandWriting/test_samples/스크린샷 2025-05-13 오후 12.54.32.png"
-    compare_images(path1, path2)
+    run_compare()

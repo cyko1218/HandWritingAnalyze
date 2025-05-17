@@ -1,16 +1,15 @@
 import os
 import numpy as np
 import cv2
-from skimage.feature import graycomatrix, graycoprops
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from skimage.feature import graycomatrix, graycoprops
 from PIL import Image
-import tensorflow as tf
-from tensorflow.keras.models import Model, load_model
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+import pandas as pd
 
 
-# 한글 폰트 설정 함수
 def set_korean_font():
+    """한글 폰트 설정 함수"""
     try:
         # Windows 환경
         if os.name == 'nt':
@@ -18,7 +17,7 @@ def set_korean_font():
             if not os.path.exists(font_path):
                 # 다른 한글 폰트 시도
                 font_path = 'c:/Windows/Fonts/gulim.ttc'  # 굴림체 시도
-        # macOS 환경 (맥 환경으로 보이므로 이 부분이 중요합니다)
+        # macOS 환경
         elif os.name == 'posix' and os.uname().sysname == 'Darwin':
             font_path = '/System/Library/Fonts/AppleSDGothicNeo.ttc'  # Apple SD Gothic Neo 폰트
             if not os.path.exists(font_path):
@@ -55,64 +54,55 @@ def set_korean_font():
         return False
 
 
-
-class HandwritingPersonalityAnalyzer:
+class HandwritingAnalyzer:
     def __init__(self):
-        """필기체 성격 분석기 초기화"""
-        # 임계값 설정 (실제 데이터 분석 후 조정 필요)
+        """필체 분석기 초기화"""
+        # 4가지 핵심 특성에 대한 임계값 설정
         self.thresholds = {
-            'size': {'small': 500, 'large': 2000},
-            'roundness': {'angular': 0.5},
-            'pressure': {'high': 0.7},
-            'tilt': {'right': 5, 'left': -5},
-            'connectivity': {'connected': 0.6},
-            'spacing': {'wide': 30, 'narrow': 10},
-            'regularity': {'regular': 0.2},
-            'speed': {'fast': 0.7}
+            'size': 150,  # 글자 높이 기준 (픽셀)
+            'pressure': 200,  # 필압 강도 기준 (0-255)
+            'slant': 9,  # 기울기 각도 기준 (도)
+            'roundness': 0.2  # 둥근 정도 기준 (0-1)
         }
 
         # 성격 특성 매핑
         self.personality_traits = {
             'size': {
-                'small': "절약 정신, 보수적, 공손함, 치밀함, 내향적, 조심스러움",
-                'medium': "균형 잡힌 성격",
-                'large': "용기와 사회성 있음, 낭비적 성향, 외향적, 말이 많고 표현하는 것을 즐김"
-            },
-            'shape': {
-                'angular': "규범을 잘 지킴, 정직함, 고집스러움, 원칙을 중시, 융통성 없음",
-                'round': "성격이 밝고 원만함, 합리적임, 상상력이 풍부, 아이디어가 많음, 사고가 유연함"
+                'small': "내향적, 치밀함, 절약 정신, 조심스러움",
+                'large': "외향적, 표현력 강함, 자신감 있음, 사회성 있음"
             },
             'pressure': {
-                'strong': "정신력이 강함, 의지가 굳음, 활력이 있음, 자기주장이 강함, 호전적임",
-                'weak': "에너지가 약함, 복종, 유순함, 수줍음"
+                'strong': "의지가 굳음, 자기주장이 강함, 정신력이 강함, 활력이 있음",
+                'weak': "유순함, 수줍음, 에너지가 약함, 민감함"
             },
-            'tilt': {
-                'right_up': "낙관적, 열정적, 희망적",
-                'right_down': "차가움, 감정표현을 잘 안함, 비관적, 비판적",
-                'neutral': "균형 잡힌 감정, 안정적"
+            'slant': {
+                'rightward': "낙관적, 열정적, 희망적, 진취적",
+                'leftward': "비관적, 감정표현을 잘 안함, 차가움, 비판적"
             },
-            'connectivity': {
-                'connected': "논리적, 합리적, 사물의 연결이나 사람과의 관계를 이해함",
-                'disconnected': "직관적, 감각적, 사물의 연결이나 사람과의 관계에 다소 냉담함"
-            },
-            'spacing': {
-                'wide': "포용력 있음, 상대방의 말을 잘 들어줌, 새로운 지식과 정보를 적극 수용함",
-                'narrow': "남의 말을 잘 수용하지 않음, 착실함, 한가지를 파고듦",
-                'medium': "균형 있는 사고방식"
-            },
-            'line_spacing': {
-                'wide': "조심스러움, 사려깊음, 남에게 피해 주는 것을 싫어함",
-                'narrow': "활력이 있음, 조심스럽지 못함, 경솔함, 남을 배려하지 않음",
-                'medium': "적절한 사회성과 배려심"
-            },
-            'regularity': {
-                'regular': "일관성, 안정 지향적, 신뢰할 만함, 유연성 부족",
-                'irregular': "활력, 자유분방, 즉흥적, 충동적, 기분파, 인내력이 약함"
-            },
-            'speed': {
-                'fast': "민첩함, 활발함, 변화 욕구, 기백이 있음, 열정적, 변덕스러움, 경솔함",
-                'slow': "느긋함, 용의주도, 신중, 끈기, 우유부단"
+            'shape': {
+                'angular': "원칙을 중시, 정직함, 고집스러움, 규범을 잘 지킴",
+                'round': "사고가 유연함, 상상력이 풍부, 원만함, 합리적임"
             }
+        }
+
+        # 16가지 성격 유형 정의
+        self.personality_types = {
+            ('small', 'strong', 'rightward', 'angular'): "원칙주의적 완벽주의자 - 내향적이지만 강한 의지와 낙관적인 성향, 원칙을 중시함",
+            ('small', 'strong', 'rightward', 'round'): "창의적 전문가 - 내향적이지만 의지가 강하고 낙관적이며 유연한 사고를 갖춤",
+            ('small', 'strong', 'leftward', 'angular'): "비판적 분석가 - 내향적이고 의지가 강하며 비판적이고 원칙적인 성향",
+            ('small', 'strong', 'leftward', 'round'): "신중한 혁신가 - 내향적이고 의지가 강하며 비판적이지만 유연한 사고",
+            ('small', 'weak', 'rightward', 'angular'): "충실한 조력자 - 내향적이고 유순하지만 낙관적이며 원칙적인 성향",
+            ('small', 'weak', 'rightward', 'round'): "조용한 창의가 - 내향적이고 유순하며 낙관적이고 유연한 사고",
+            ('small', 'weak', 'leftward', 'angular'): "신중한 비평가 - 내향적이고 유순하며 비판적이고 원칙적인 성향",
+            ('small', 'weak', 'leftward', 'round'): "섬세한 관찰자 - 내향적이고 유순하며 비판적이지만 유연한 사고",
+            ('large', 'strong', 'rightward', 'angular'): "리더형 실행가 - 외향적이고 자기주장이 강하며 낙관적이고 원칙적인 성향",
+            ('large', 'strong', 'rightward', 'round'): "열정적 비전리더 - 외향적이고 자기주장이 강하며 낙관적이고 유연한 사고",
+            ('large', 'strong', 'leftward', 'angular'): "도전적 실용주의자 - 외향적이고 자기주장이 강하며 비판적이고 원칙적인 성향",
+            ('large', 'strong', 'leftward', 'round'): "전략적 개혁가 - 외향적이고 자기주장이 강하며 비판적이지만 유연한 사고",
+            ('large', 'weak', 'rightward', 'angular'): "사교적 조정자 - 외향적이지만 유순하며 낙관적이고 원칙적인 성향",
+            ('large', 'weak', 'rightward', 'round'): "자유로운 영감가 - 외향적이지만 유순하며 낙관적이고 유연한 사고",
+            ('large', 'weak', 'leftward', 'angular'): "사실적 대변인 - 외향적이지만 유순하며 비판적이고 원칙적인 성향",
+            ('large', 'weak', 'leftward', 'round'): "적응적 표현가 - 외향적이지만 유순하며 비판적이지만 유연한 사고"
         }
 
     def preprocess_image(self, image_path):
@@ -137,6 +127,10 @@ class HandwritingPersonalityAnalyzer:
             # 이진화 (Otsu 알고리즘 사용)
             _, binary = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
+            # 모폴로지 연산으로 노이즈 제거
+            kernel = np.ones((3, 3), np.uint8)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
             # 저장할 이미지들
             processed_images = {
                 'original': img,
@@ -151,7 +145,7 @@ class HandwritingPersonalityAnalyzer:
             return None
 
     def extract_features(self, processed_images):
-        """필적의 특성 추출 함수"""
+        """4가지 핵심 필적 특성 추출 함수"""
         try:
             binary = processed_images['binary']
             gray = processed_images['gray']
@@ -159,19 +153,151 @@ class HandwritingPersonalityAnalyzer:
 
             # 1. 글씨 크기 분석
             contours, _ = cv2.findContours(binary.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            char_sizes = [cv2.contourArea(cnt) for cnt in contours if cv2.contourArea(cnt) > 10]
+            heights = []
+            for cnt in contours:
+                if cv2.contourArea(cnt) > 30:  # 작은 노이즈 필터링
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    heights.append(h)
 
-            if char_sizes:
-                features['avg_size'] = np.mean(char_sizes)
-                features['size_std'] = np.std(char_sizes)
+            features['avg_height'] = np.mean(heights) if heights else 0
+
+            # 2. 필압 분석
+            # 이진화된 이미지에서 글자 부분의 원본 그레이스케일 값 측정
+            if np.max(binary) > 0:
+                mask = binary > 0
+                if np.sum(mask) > 0:
+                    # 글씨 부분의 평균 강도 계산 (낮을수록 필압이 강함)
+                    # 반전시켜서 높은 값이 강한 필압을 나타내도록 함
+                    pressure_values = 255 - gray[mask]
+                    features['pressure'] = np.mean(pressure_values)
+                else:
+                    features['pressure'] = 0
             else:
-                features['avg_size'] = 0
-                features['size_std'] = 0
+                features['pressure'] = 0
 
-            # 2. 글씨 모양 분석 (각진 정도 vs 둥근 정도)
+            # 3. 기울기 분석 - 글자 전체 기울기 측정 (PCA 방식 사용)
+            def analyze_slant(binary_image):
+                # 윤곽선 검출
+                contours, _ = cv2.findContours(binary_image.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                # 모든 글자의 기울기 각도를 저장할 리스트
+                all_angles = []
+
+                # 각 글자(윤곽선)별로 기울기 분석
+                for cnt in contours:
+                    # 작은 노이즈는 건너뛰기
+                    if cv2.contourArea(cnt) < 100:
+                        continue
+
+                    # 글자의 경계 상자 정보
+                    rect = cv2.minAreaRect(cnt)
+                    width, height = rect[1]
+                    angle = rect[2]
+
+                    # 경계 상자가 세로로 긴 경우(높이>너비) 각도 보정
+                    if height > width:
+                        angle = angle - 90
+
+                    # 각도 범위를 -45°~45°로 조정
+                    while angle < -45:
+                        angle += 90
+                    while angle > 45:
+                        angle -= 90
+
+                    all_angles.append(angle)
+
+                # 글자가 없는 경우
+                if not all_angles:
+                    return 0
+
+                # 각도의 중앙값 사용 (이상치에 덜 민감)
+                return np.median(all_angles)
+
+            def analyze_slant_by_top_points(binary_image):
+                """글자의 상단점을 연결하여 기울기를 분석하는 함수"""
+                # 윤곽선 찾기
+                contours, _ = cv2.findContours(binary_image.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                # 각 글자 윤곽선의 경계 상자와 상단점 찾기
+                letter_tops = []
+
+                for cnt in contours:
+                    # 작은 노이즈 필터링
+                    if cv2.contourArea(cnt) < 50:
+                        continue
+
+                    # 경계 상자 구하기
+                    x, y, w, h = cv2.boundingRect(cnt)
+
+                    # 글자의 상단 중심점 (x + w/2, y)
+                    top_center_x = x + w / 2
+                    top_y = y
+
+                    # 글자가 충분히 큰 경우에만 포함
+                    if h > 10:
+                        letter_tops.append((top_center_x, top_y))
+
+                # 글자가 충분하지 않으면 0 반환
+                if len(letter_tops) < 2:
+                    return 0
+
+                # x좌표로 정렬 (왼쪽에서 오른쪽으로)
+                letter_tops.sort(key=lambda p: p[0])
+
+                # 디버깅: 상단점 정보 출력
+                # print(f"정렬된 글자 상단점: {letter_tops}")
+
+                # 선형 회귀로 기울기 계산
+                x_coords = np.array([p[0] for p in letter_tops])
+                y_coords = np.array([p[1] for p in letter_tops])
+
+                # 선형 회귀로 기울기 계산 (y = mx + b)
+                slope, intercept = np.polyfit(x_coords, y_coords, 1)
+
+                # 이미지 좌표계에서는 y가 아래로 증가하므로,
+                # 양의 기울기는 우하향, 음의 기울기는 우상향을 의미
+                # 따라서 부호를 반전시켜 직관적인 해석이 가능하게 함
+                angle = np.arctan(-slope) * 180 / np.pi
+
+                # 시각화를 위한 선 좌표 계산 (옵션)
+                x_start = min(x_coords)
+                x_end = max(x_coords)
+                y_start = slope * x_start + intercept
+                y_end = slope * x_end + intercept
+                line_coords = ((int(x_start), int(y_start)), (int(x_end), int(y_end)))
+
+                return angle, line_coords, letter_tops
+
+            # 필적 특성 추출 함수 내에서 사용 (extract_features 함수의 일부)
+            try:
+                # 상단점 기반 기울기 분석
+                slant_result = analyze_slant_by_top_points(binary)
+
+                if isinstance(slant_result, tuple):
+                    # 추가 정보가 반환된 경우
+                    slant_angle, line_coords, letter_tops = slant_result
+
+                    # 시각화를 위해 저장 (선택 사항)
+                    features['slant_line'] = line_coords
+                    features['letter_tops'] = letter_tops
+                else:
+                    # 각도만 반환된 경우
+                    slant_angle = slant_result
+
+                # 결과 저장
+                features['slant_angle'] = slant_angle
+
+                # 디버깅 출력
+                #print(f"상단점 연결 기울기 각도: {slant_angle:.2f}°")
+                #print(f"기울기 방향: {'우상향' if slant_angle > 0 else '우하향' if slant_angle < 0 else '수직'}")
+
+            except Exception as e:
+                print(f"기울기 분석 중 오류 발생: {str(e)}")
+                features['slant_angle'] = 0
+            # 4. 글자 모양 분석 (각진 정도 vs 둥근 정도)
             roundness_values = []
             for cnt in contours:
-                if cv2.contourArea(cnt) > 10:
+                if cv2.contourArea(cnt) > 30:
                     perimeter = cv2.arcLength(cnt, True)
                     if perimeter > 0:
                         area = cv2.contourArea(cnt)
@@ -179,103 +305,6 @@ class HandwritingPersonalityAnalyzer:
                         roundness_values.append(circularity)
 
             features['roundness'] = np.mean(roundness_values) if roundness_values else 0
-
-            # 3. 필압 분석 (픽셀 강도의 변화)
-            # 이진화된 이미지에서는 정확한 필압을 측정하기 어려움
-            # 대안으로, 원본 그레이스케일 이미지에서 필기 부분의 강도 분석
-            if np.max(binary) > 0:
-                mask = binary > 0
-                if np.sum(mask) > 0:
-                    inverted_gray = 255 - gray  # 흰 배경, 검은 글씨를 검은 배경, 흰 글씨로 반전
-                    pressure_values = inverted_gray[mask]
-                    features['pressure'] = np.mean(pressure_values) / 255.0  # 0~1 사이로 정규화
-                else:
-                    features['pressure'] = 0
-            else:
-                features['pressure'] = 0
-
-            # 4. 기울기 분석
-            # 히스토그램 프로젝션 방법으로 기울기 추정
-            projection = []
-            for angle in range(-45, 46, 5):  # -45도부터 45도까지 5도 간격
-                rotated = self._rotate_image(binary, angle)
-                proj = np.sum(rotated, axis=1)  # 수평 프로젝션
-                projection.append(np.std(proj))  # 프로젝션의 표준편차
-
-            if projection:
-                max_idx = np.argmax(projection)
-                features['tilt_angle'] = -45 + (max_idx * 5)
-            else:
-                features['tilt_angle'] = 0
-
-            # 5. 획의 연결성 분석
-            # 연결 요소 레이블링
-            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
-            if num_labels > 1:  # 배경을 제외한 연결 요소
-                # 획 당 평균 픽셀 수
-                stroke_pixels = [stats[i, cv2.CC_STAT_AREA] for i in range(1, num_labels)]
-                features['avg_stroke_length'] = np.mean(stroke_pixels) if stroke_pixels else 0
-
-                # 연결된 획의 비율 (50픽셀 이상인 획을 연결된 것으로 간주)
-                connected_strokes = sum(1 for s in stroke_pixels if s > 50)
-                features['stroke_connectivity'] = connected_strokes / (num_labels - 1) if num_labels > 1 else 0
-            else:
-                features['avg_stroke_length'] = 0
-                features['stroke_connectivity'] = 0
-
-            # 6. 획 사이 공간 및 글자 간격 분석
-            # 수평/수직 투영 프로필로 간격 측정
-            h_proj = np.sum(binary, axis=1)
-            v_proj = np.sum(binary, axis=0)
-
-            # 빈 공간 감지 (값이 0인 위치)
-            h_spaces = np.where(h_proj == 0)[0]
-            v_spaces = np.where(v_proj == 0)[0]
-
-            # 연속된 빈 공간의 길이 계산
-            h_space_lengths = []
-            v_space_lengths = []
-
-            if len(h_spaces) > 0:
-                # 연속된 인덱스 그룹으로 분할
-                h_groups = np.split(h_spaces, np.where(np.diff(h_spaces) != 1)[0] + 1)
-                h_space_lengths = [len(g) for g in h_groups if len(g) > 0]
-
-            if len(v_spaces) > 0:
-                v_groups = np.split(v_spaces, np.where(np.diff(v_spaces) != 1)[0] + 1)
-                v_space_lengths = [len(g) for g in v_groups if len(g) > 0]
-
-            # 평균 공간 크기
-            features['avg_h_space'] = np.mean(h_space_lengths) if h_space_lengths else 0
-            features['avg_v_space'] = np.mean(v_space_lengths) if v_space_lengths else 0
-
-            # 7. 규칙성 분석
-            # 글자 크기의 변동 계수
-            features['size_cv'] = (np.std(char_sizes) / np.mean(char_sizes)
-                                   if char_sizes and np.mean(char_sizes) > 0 else 0)
-
-            # 글자 간격의 변동 계수
-            features['space_cv'] = (np.std(v_space_lengths) / np.mean(v_space_lengths)
-                                    if v_space_lengths and np.mean(v_space_lengths) > 0 else 0)
-
-            # 8. 텍스처 특성 (필기 속도와 관련된 특성)
-            if np.max(binary) > 0:
-                # GLCM 계산 (Gray-Level Co-occurrence Matrix)
-                glcm = graycomatrix(binary, [1], [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], levels=256,
-                                    symmetric=True, normed=True)
-
-                # GLCM 특성 추출
-                features['contrast'] = np.mean(graycoprops(glcm, 'contrast'))
-                features['dissimilarity'] = np.mean(graycoprops(glcm, 'dissimilarity'))
-                features['homogeneity'] = np.mean(graycoprops(glcm, 'homogeneity'))
-                features['energy'] = np.mean(graycoprops(glcm, 'energy'))
-                features['correlation'] = np.mean(graycoprops(glcm, 'correlation'))
-            else:
-                features['contrast'] = 0
-                features['dissimilarity'] = 0
-                features['homogeneity'] = 0
-                features['energy'] = 0
-                features['correlation'] = 0
 
             return features
 
@@ -286,89 +315,52 @@ class HandwritingPersonalityAnalyzer:
     def analyze_personality(self, features):
         """추출된 특성을 바탕으로 성격 분석"""
         try:
-            personality = {}
+            categories = {}
+            measured_values = {}  # 측정값 저장용 딕셔너리
 
-            # 1. 글씨 크기에 따른 성격
-            avg_size = features['avg_size']
-            if avg_size < self.thresholds['size']['small']:
-                personality['size'] = {'category': 'small', 'traits': self.personality_traits['size']['small']}
-            elif avg_size > self.thresholds['size']['large']:
-                personality['size'] = {'category': 'large', 'traits': self.personality_traits['size']['large']}
-            else:
-                personality['size'] = {'category': 'medium', 'traits': self.personality_traits['size']['medium']}
+            # 1. 글씨 크기에 따른 분류
+            measured_values['size'] = features['avg_height']
+            categories['size'] = 'small' if features['avg_height'] < self.thresholds['size'] else 'large'
+            #print(f"글씨 크기 측정값: {features['avg_height']:.2f}px (임계값: {self.thresholds['size']}px)")
 
-            # 2. 글씨 모양에 따른 성격
-            roundness = features['roundness']
-            if roundness < self.thresholds['roundness']['angular']:
-                personality['shape'] = {'category': 'angular', 'traits': self.personality_traits['shape']['angular']}
-            else:
-                personality['shape'] = {'category': 'round', 'traits': self.personality_traits['shape']['round']}
+            # 2. 필압에 따른 분류
+            measured_values['pressure'] = features['pressure']
+            categories['pressure'] = 'strong' if features['pressure'] > self.thresholds['pressure'] else 'weak'
+            #print(f"필압 측정값: {features['pressure']:.2f} (임계값: {self.thresholds['pressure']})")
 
-            # 3. 필압에 따른 성격
-            pressure = features['pressure']
-            if pressure > self.thresholds['pressure']['high']:
-                personality['pressure'] = {'category': 'strong',
-                                           'traits': self.personality_traits['pressure']['strong']}
-            else:
-                personality['pressure'] = {'category': 'weak', 'traits': self.personality_traits['pressure']['weak']}
+            # 3. 기울기에 따른 분류
+            measured_values['slant'] = features['slant_angle']
+            categories['slant'] = 'rightward' if features['slant_angle'] > self.thresholds['slant'] else 'leftward'
+            #print(f"기울기 측정값: {features['slant_angle']:.2f}° (임계값: {self.thresholds['slant']}°)")
 
-            # 4. 기울기에 따른 성격
-            tilt = features['tilt_angle']
-            if tilt > self.thresholds['tilt']['right']:
-                personality['tilt'] = {'category': 'right_up', 'traits': self.personality_traits['tilt']['right_up']}
-            elif tilt < self.thresholds['tilt']['left']:
-                personality['tilt'] = {'category': 'right_down',
-                                       'traits': self.personality_traits['tilt']['right_down']}
-            else:
-                personality['tilt'] = {'category': 'neutral', 'traits': self.personality_traits['tilt']['neutral']}
+            # 4. 글자 모양에 따른 분류
+            measured_values['roundness'] = features['roundness']
+            categories['shape'] = 'round' if features['roundness'] > self.thresholds['roundness'] else 'angular'
+            #print(f"둥근 정도 측정값: {features['roundness']:.2f} (임계값: {self.thresholds['roundness']})")
 
-            # 5. 획의 연결성에 따른 성격
-            connectivity = features['stroke_connectivity']
-            if connectivity > self.thresholds['connectivity']['connected']:
-                personality['connectivity'] = {'category': 'connected',
-                                               'traits': self.personality_traits['connectivity']['connected']}
-            else:
-                personality['connectivity'] = {'category': 'disconnected',
-                                               'traits': self.personality_traits['connectivity']['disconnected']}
+            # 성격 특성 추출
+            personality = {
+                'categories': categories,
+                'measured_values': measured_values,  # 측정값 저장
+                'traits': {
+                    'size': self.personality_traits['size'][categories['size']],
+                    'pressure': self.personality_traits['pressure'][categories['pressure']],
+                    'slant': self.personality_traits['slant'][categories['slant']],
+                    'shape': self.personality_traits['shape'][categories['shape']]
+                }
+            }
 
-            # 6. 글자 간격에 따른 성격
-            avg_v_space = features['avg_v_space']
-            if avg_v_space > self.thresholds['spacing']['wide']:
-                personality['char_spacing'] = {'category': 'wide', 'traits': self.personality_traits['spacing']['wide']}
-            elif avg_v_space < self.thresholds['spacing']['narrow']:
-                personality['char_spacing'] = {'category': 'narrow',
-                                               'traits': self.personality_traits['spacing']['narrow']}
-            else:
-                personality['char_spacing'] = {'category': 'medium',
-                                               'traits': self.personality_traits['spacing']['medium']}
+            # 16가지 유형 중 해당하는 유형 찾기
+            type_key = (categories['size'], categories['pressure'], categories['slant'], categories['shape'])
+            personality['type'] = self.personality_types.get(type_key, "알 수 없는 유형")
 
-            # 7. 행간 간격에 따른 성격
-            avg_h_space = features['avg_h_space']
-            if avg_h_space > self.thresholds['spacing']['wide']:
-                personality['line_spacing'] = {'category': 'wide',
-                                               'traits': self.personality_traits['line_spacing']['wide']}
-            elif avg_h_space < self.thresholds['spacing']['narrow']:
-                personality['line_spacing'] = {'category': 'narrow',
-                                               'traits': self.personality_traits['line_spacing']['narrow']}
-            else:
-                personality['line_spacing'] = {'category': 'medium',
-                                               'traits': self.personality_traits['line_spacing']['medium']}
-
-            # 8. 규칙성에 따른 성격
-            regularity = features['size_cv']  # 크기의 변동 계수로 규칙성 판단
-            if regularity < self.thresholds['regularity']['regular']:
-                personality['regularity'] = {'category': 'regular',
-                                             'traits': self.personality_traits['regularity']['regular']}
-            else:
-                personality['regularity'] = {'category': 'irregular',
-                                             'traits': self.personality_traits['regularity']['irregular']}
-
-            # 9. 속도에 따른 성격 (GLCM 특성으로 추정)
-            speed_indicator = features['contrast']  # 높은 대비는 빠른 필기와 관련
-            if speed_indicator > self.thresholds['speed']['fast']:
-                personality['speed'] = {'category': 'fast', 'traits': self.personality_traits['speed']['fast']}
-            else:
-                personality['speed'] = {'category': 'slow', 'traits': self.personality_traits['speed']['slow']}
+            # 종합 결과 출력
+            print("\n=== 필체 분석 결과 ===")
+            print(f"글씨 크기: {'작음' if categories['size'] == 'small' else '큼'} ({measured_values['size']:.2f}px)")
+            print(f"필압: {'강함' if categories['pressure'] == 'strong' else '약함'} ({measured_values['pressure']:.2f})")
+            print(f"기울기: {'우상향' if categories['slant'] == 'rightward' else '우하향'} ({measured_values['slant']:.2f}°)")
+            print(f"글자 모양: {'둥글다' if categories['shape'] == 'round' else '각지다'} ({measured_values['roundness']:.2f})")
+            print(f"\n성격 유형: {personality['type']}")
 
             return personality
 
@@ -376,128 +368,99 @@ class HandwritingPersonalityAnalyzer:
             print(f"성격 분석 중 오류 발생: {str(e)}")
             return None
 
-    def generate_report(self, personality):
-        """성격 분석 결과를 보고서 형태로 생성"""
-        report = {
-            'summary': self._generate_summary(personality),
-            'details': personality,
-            'dominant_traits': self._extract_dominant_traits(personality)
-        }
-        return report
-
-    def _generate_summary(self, personality):
-        """성격 분석 결과의 요약 생성"""
-        try:
-            # 대략적인 성격 유형 추론
-            intro_extro = "내향적" if personality['size']['category'] == 'small' else "외향적"
-            rational_emotional = "이성적" if personality['shape']['category'] == 'angular' else "감성적"
-            cautious_bold = "신중한" if personality['speed']['category'] == 'slow' else "대담한"
-
-            summary = f"{intro_extro}이고 {rational_emotional}이며 {cautious_bold} 성격의 소유자입니다. "
-
-            # 주요 특성 추가
-            if personality['pressure']['category'] == 'strong':
-                summary += "강한 의지력과 자기주장이 있으며, "
-            else:
-                summary += "유순하고 감성적이며, "
-
-            if personality['tilt']['category'] == 'right_up':
-                summary += "낙관적이고 열정적인 성향을 보입니다. "
-            elif personality['tilt']['category'] == 'right_down':
-                summary += "비판적이고 분석적인 성향을 보입니다. "
-            else:
-                summary += "균형 잡힌 사고방식을 가지고 있습니다. "
-
-            # 사회적 특성 추가
-            if personality['char_spacing']['category'] == 'wide':
-                summary += "다른 사람의 의견을 존중하고 새로운 정보를 수용하는 편입니다."
-            else:
-                summary += "자신의 의견을 중요시하며 한 가지에 깊이 집중하는 편입니다."
-
-            return summary
-
-        except Exception as e:
-            print(f"요약 생성 중 오류 발생: {str(e)}")
-            return "성격 특성을 요약하는 과정에서 오류가 발생했습니다."
-
-    def _extract_dominant_traits(self, personality):
-        """가장 두드러진 성격 특성 추출"""
-        traits = []
-
-        # 모든 특성에서 중요한 키워드 추출
-        for category, data in personality.items():
-            traits_text = data['traits']
-            traits_list = [trait.strip() for trait in traits_text.split(',')]
-            traits.extend(traits_list)
-
-        # 중복 제거 및 빈도수 계산
-        trait_counts = {}
-        for trait in traits:
-            trait_counts[trait] = trait_counts.get(trait, 0) + 1
-
-        # 가장 빈번한 특성 5개 추출
-        dominant_traits = sorted(trait_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        return [trait for trait, count in dominant_traits]
-
-    def _rotate_image(self, image, angle):
-        """이미지를 주어진 각도로 회전"""
-        height, width = image.shape[:2]
-        center = (width // 2, height // 2)
-        rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-        rotated = cv2.warpAffine(image, rotation_matrix, (width, height), flags=cv2.INTER_LINEAR)
-        return rotated
-
     def visualize_analysis(self, processed_images, features, personality):
         """분석 결과 시각화"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        # 한글 폰트 설정
+        set_korean_font()
+
+        fig = plt.figure(figsize=(16, 12))
+        gs = fig.add_gridspec(3, 6)
 
         # 원본 이미지
-        axes[0, 0].imshow(cv2.cvtColor(processed_images['original'], cv2.COLOR_BGR2RGB))
-        axes[0, 0].set_title('원본 이미지')
-        axes[0, 0].axis('off')
+        ax1 = fig.add_subplot(gs[0, :3])
+        ax1.imshow(cv2.cvtColor(processed_images['original'], cv2.COLOR_BGR2RGB))
+        ax1.set_title('원본 이미지')
+        ax1.axis('off')
 
         # 이진화 이미지
-        axes[0, 1].imshow(processed_images['binary'], cmap='gray')
-        axes[0, 1].set_title('이진화 이미지')
-        axes[0, 1].axis('off')
+        ax2 = fig.add_subplot(gs[0, 3:])
+        ax2.imshow(processed_images['binary'], cmap='gray')
+        ax2.set_title('이진화 이미지')
+        ax2.axis('off')
 
-        # 특성 시각화 (수평 막대 그래프)
-        feature_labels = ['글씨 크기', '둥근 정도', '필압', '기울기', '연결성', '글자 간격', '행간', '규칙성', '속도']
+        # 특성 바 차트
+        ax3 = fig.add_subplot(gs[1, :3])
+
+        feature_names = ['글씨 크기', '필압', '기울기', '둥근 정도']
         feature_values = [
-            features['avg_size'] / self.thresholds['size']['large'],
-            features['roundness'],
-            features['pressure'],
-            (features['tilt_angle'] + 45) / 90,  # -45~45 -> 0~1
-            features['stroke_connectivity'],
-            features['avg_v_space'] / self.thresholds['spacing']['wide'],
-            features['avg_h_space'] / self.thresholds['spacing']['wide'],
-            1 - features['size_cv'],  # 변동계수가 작을수록 규칙적
-            features['contrast'] / self.thresholds['speed']['fast']
+            features['avg_height'] / (self.thresholds['size'] * 2),  # 0-1 정규화
+            features['pressure'] / 255,  # 0-1 정규화
+            (features['slant_angle'] + 45) / 90,  # -45~45 -> 0-1 정규화
+            features['roundness']  # 이미 0-1 범위
         ]
 
-        # 값을 0~1 범위로 클리핑
+        # 값 클리핑 (0-1 범위로 제한)
         feature_values = [max(0, min(1, val)) for val in feature_values]
 
-        # 수평 막대 그래프
-        y_pos = np.arange(len(feature_labels))
-        axes[1, 0].barh(y_pos, feature_values, align='center')
-        axes[1, 0].set_yticks(y_pos)
-        axes[1, 0].set_yticklabels(feature_labels)
-        axes[1, 0].set_xlim(0, 1)
-        axes[1, 0].set_title('필적 특성')
+        # 바 차트 생성
+        bars = ax3.barh(feature_names, feature_values, color='skyblue')
+        ax3.set_xlim(0, 1)
+        ax3.set_title('필적 특성 측정')
 
-        # 성격 특성 텍스트
-        axes[1, 1].axis('off')
-        summary_text = personality['summary']
-        dominant_traits = personality['dominant_traits']
+        # 임계값 표시
+        threshold_values = [
+            self.thresholds['size'] / (self.thresholds['size'] * 2),
+            self.thresholds['pressure'] / 255,
+            (self.thresholds['slant'] + 45) / 90,
+            self.thresholds['roundness']
+        ]
 
-        text = f"성격 특성 요약:\n{summary_text}\n\n"
-        text += "주요 특성:\n"
-        for i, trait in enumerate(dominant_traits, 1):
-            text += f"{i}. {trait}\n"
+        for i, threshold in enumerate(threshold_values):
+            ax3.axvline(x=threshold, ymin=i / len(feature_names), ymax=(i + 1) / len(feature_names),
+                        color='red', linestyle='--', alpha=0.7)
 
-        axes[1, 1].text(0, 0.5, text, fontsize=12, va='center', wrap=True)
-        axes[1, 1].set_title('성격 분석 결과')
+        # 결과 텍스트
+        categories = personality['categories']
+        ax4 = fig.add_subplot(gs[1, 3:])
+        ax4.axis('off')
+
+        # 카테고리 텍스트 생성
+        category_text = "\n".join([
+            f"글씨 크기: {'작음' if categories['size'] == 'small' else '큼'}",
+            f"필압: {'강함' if categories['pressure'] == 'strong' else '약함'}",
+            f"기울기: {'우상향' if categories['slant'] == 'rightward' else '우하향'}",
+            f"글자 모양: {'둥글다' if categories['shape'] == 'round' else '각지다'}"
+        ])
+
+        ax4.text(0, 0.7, category_text, fontsize=14)
+        ax4.set_title('필적 특성 분류 결과')
+
+        # 성격 유형 및 특성
+        ax5 = fig.add_subplot(gs[2, :])
+        ax5.axis('off')
+
+        # 성격 유형 정보
+        personality_info = f"[ 성격 유형 ]\n{personality['type']}\n\n"
+
+        # 각 특성별 성격 특성
+        traits_info = "[ 세부 성격 특성 ]\n"
+        for feature, trait in personality['traits'].items():
+            if feature == 'size':
+                feature_name = "글씨 크기"
+            elif feature == 'pressure':
+                feature_name = "필압"
+            elif feature == 'slant':
+                feature_name = "기울기"
+            elif feature == 'shape':
+                feature_name = "글자 모양"
+            else:
+                feature_name = feature
+
+            traits_info += f"• {feature_name}: {trait}\n"
+
+        # 텍스트 출력
+        ax5.text(0, 0.7, personality_info + traits_info, fontsize=14, linespacing=1.5)
+        ax5.set_title('성격 분석 결과')
 
         plt.tight_layout()
         return fig
@@ -515,30 +478,33 @@ class HandwritingPersonalityAnalyzer:
             return {"error": "특성 추출 실패"}
 
         # 3. 성격 분석
-        personality_traits = self.analyze_personality(features)
-        if personality_traits is None:
+        personality = self.analyze_personality(features)
+        if personality is None:
             return {"error": "성격 분석 실패"}
 
-        # 4. 결과 보고서 생성
-        report = self.generate_report(personality_traits)
-
-        # 5. 결과 시각화 (선택적)
+        # 4. 결과 시각화 (선택적)
         if visualize:
-            visualization = self.visualize_analysis(processed_images, features, report)
-            report['visualization'] = visualization
+            visualization = self.visualize_analysis(processed_images, features, personality)
+            return {
+                "features": features,
+                "personality": personality,
+                "visualization": visualization
+            }
 
         return {
             "features": features,
-            "personality": report
+            "personality": personality
         }
 
 
 # 앱 사용 예시
-def main():
-    analyzer = HandwritingPersonalityAnalyzer()
+def main(image_path):
+    """분석 실행 함수"""
+    # 한글 폰트 설정
+    set_korean_font()
 
-    # 테스트 이미지 경로
-    image_path = "/Users/chanyoungko/Desktop/HandWriting/analyze_image/스크린샷 2025-04-28 오후 9.28.06.png"  # 실제 이미지 경로로 변경 필요
+    # 분석기 초기화
+    analyzer = HandwritingAnalyzer()
 
     # 이미지가 존재하는지 확인
     if not os.path.exists(image_path):
@@ -554,27 +520,25 @@ def main():
 
     # 결과 출력
     print("\n=== 필적 성격 분석 결과 ===")
-    print("\n요약:")
-    print(result['personality']['summary'])
+    print("\n성격 유형:")
+    print(result["personality"]["type"])
 
-    print("\n주요 성격 특성:")
-    for i, trait in enumerate(result['personality']['dominant_traits'], 1):
-        print(f"{i}. {trait}")
+    print("\n특성 카테고리:")
+    for feature, category in result["personality"]["categories"].items():
+        print(f"{feature}: {category}")
 
-    print("\n상세 분석:")
-    for category, data in result['personality']['details'].items():
-        if category != 'summary' and category != 'dominant_traits':
-            print(f"- {category}: {data['category']} ({data['traits']})")
+    print("\n성격 특성:")
+    for feature, traits in result["personality"]["traits"].items():
+        print(f"{feature}: {traits}")
 
     # 시각화 결과 표시
-    if 'visualization' in result['personality']:
+    if "visualization" in result:
         plt.show()
+
+    return result
 
 
 if __name__ == "__main__":
-    # 한글 폰트 설정 호출
-    set_korean_font()
-    analyzer = HandwritingPersonalityAnalyzer()
-
-
-    main()
+    # 테스트 이미지 경로 (실제 경로로 변경 필요)
+    image_path = "/Users/chanyoungko/Desktop/HandWriting/analyze_image/스크린샷 2025-04-28 오후 9.28.06.png"
+    main(image_path)
