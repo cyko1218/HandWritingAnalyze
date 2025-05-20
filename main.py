@@ -358,7 +358,7 @@ if __name__ == "__main__":
 
     # 👉 참조 폴더 변경 - 이 부분만 수정했습니다!
     reference_folder = "/Users/chanyoungko/Desktop/HandWriting/custom_references"  # 참조 폴더 경로
-    test_image_path = "/Users/chanyoungko/Desktop/HandWriting/test_samples/img.png"  # 테스트 이미지 경로
+    test_image_path = "/reference_samples/img.png"  # 테스트 이미지 경로
 
     # 사용자 입력 처리
     print("\n" + "=" * 50)
@@ -521,6 +521,15 @@ if __name__ == "__main__":
         return similarity
 
 
+    def create_result(results):
+        if not results:
+            print("❌ 비교할 결과 없음")
+            exit(1)
+
+        best_result = results[0]
+
+        #return AnalyzeResponse(best_result['avg_similarity'], best_result['avg_pressure'], best_result['avg_slant'], "")
+
     # ============ 메인 실행 ============
     if __name__ == "__main__":
         model_path = "handwriting_hybrid_model_1.keras"
@@ -570,6 +579,9 @@ if __name__ == "__main__":
             print("#" * 50)
         else:
             print("❌ 유사도 계산에 실패했습니다.")
+
+
+
 
     # 또는 개별 이미지 비교를 원하는 경우 (원래 코드)
     # image1_path = "/path/to/reference_image.png"
