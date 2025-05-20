@@ -6,6 +6,34 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras import layers
 import glob
 
+def is_handwriting_image(image, pixel_threshold_ratio=0.01, min_contours=5):
+    """
+    이미지에 글씨가 포함되어 있는지 판단
+    - 픽셀 기준: 전체 픽셀 중 어두운 영역의 비율
+    - 컨투어 기준: 윤곽선(획) 개수
+    """
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+
+    # 이진화 및 닫기 연산 (노이즈 제거)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+
+    # 1. 픽셀 비율 검사
+    pixel_ratio = np.sum(binary > 0) / binary.size
+    if pixel_ratio < pixel_threshold_ratio:
+        return False  # 너무 비어 있음
+
+    # 2. 컨투어 개수 검사
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) < min_contours:
+        return False
+
+    return True
+
+
 # ========================= 커스텀 레이어 =========================
 class L1DistanceLayer(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
@@ -92,6 +120,10 @@ def preprocess_image(image_path, target_height=64, target_width=512):
         if img is None:
             raise ValueError(f"이미지를 불러올 수 없습니다: {image_path}")
 
+        # 👇 글씨 유무 검사 추가
+        if not is_handwriting_image(img):
+            raise ValueError("⚠️ 글씨가 없는 이미지입니다.")
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
         original_gray = gray.copy()
 
@@ -124,6 +156,7 @@ def preprocess_image(image_path, target_height=64, target_width=512):
     except Exception as e:
         print(f"이미지 전처리 오류 ({image_path}): {e}")
         return None, None
+
 
 # ========================= 유사도 계산 =========================
 def get_similarity(model, image1_path, image2_path):

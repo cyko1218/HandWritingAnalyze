@@ -976,8 +976,8 @@ if __name__ == "__main__":
     model, history = resume_training(
         model_path=MODEL_PATH,
         csv_path=CSV_PATH,
-        additional_epochs=6,  # 추가할 에폭 수
-        initial_epoch=10       # 기존에 학습된 에폭 수
+        additional_epochs=10,  # 추가할 에폭 수
+        initial_epoch=16       # 기존에 학습된 에폭 수
     )
 
 
