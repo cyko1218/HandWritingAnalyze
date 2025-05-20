@@ -361,6 +361,8 @@ class HandwritingAnalyzer:
             print(f"기울기: {'우상향' if categories['slant'] == 'rightward' else '우하향'} ({measured_values['slant']:.2f}°)")
             print(f"글자 모양: {'둥글다' if categories['shape'] == 'round' else '각지다'} ({measured_values['roundness']:.2f})")
             print(f"\n성격 유형: {personality['type']}")
+            # 요약 문장 생성
+            personality['summary'] = self.generate_summary_paragraph(personality['traits'])
 
             return personality
 
@@ -496,6 +498,35 @@ class HandwritingAnalyzer:
             "personality": personality
         }
 
+    def generate_summary_paragraph(self, traits):
+        parts = []
+
+        # 글씨 크기
+        if '내향적' in traits['size']:
+            parts.append("내향적이고 치밀하며 조심스러운 성향을 지녔고")
+        else:
+            parts.append("외향적이고 자신감 있으며 표현력이 뛰어난 성향을 보이고")
+
+        # 필압
+        if '의지가 굳음' in traits['pressure']:
+            parts.append("강한 의지와 자기주장을 바탕으로 활력 있게 자신의 생각을 표현합니다")
+        else:
+            parts.append("유순하고 민감하며 에너지는 다소 낮지만 주변에 조화롭게 어울립니다")
+
+        # 기울기
+        if '낙관적' in traits['slant']:
+            parts.append("낙관적이고 진취적인 태도를 가지고 있으며")
+        else:
+            parts.append("감정을 드러내는 데 소극적이고 신중하며 다소 비판적인 관점을 지닙니다")
+
+        # 글자 모양
+        if '사고가 유연함' in traits['shape']:
+            parts.append("사고가 유연하고 상상력이 풍부하여 원만하고 합리적인 관계를 지향하는 경향이 있습니다")
+        else:
+            parts.append("정직하고 규범을 중시하며 단호하고 원칙적인 태도를 유지합니다")
+
+        return " ".join(parts)
+
 
 # 앱 사용 예시
 def main(image_path):
@@ -530,6 +561,9 @@ def main(image_path):
     print("\n성격 특성:")
     for feature, traits in result["personality"]["traits"].items():
         print(f"{feature}: {traits}")
+
+    print("\n성격 요약:")
+    print(result["personality"]["summary"])
 
     # 시각화 결과 표시
     if "visualization" in result:
