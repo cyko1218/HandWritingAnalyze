@@ -181,6 +181,18 @@ def get_similarity(model, image1_path, image2_path):
 
     return similarity, pressure, slant, hand2
 
+def rescale_similarity(similarity, split_point=0.8):
+    """
+    유사도를 0~100% 범위로 재정규화하되,
+    0~split_point는 0~50%, split_point~1.0은 50~100%로 분할
+    """
+    if similarity < split_point:
+        return (similarity / split_point) * 50
+    else:
+        return 50 + ((similarity - split_point) / (1.0 - split_point)) * 50
+
+
+
 # ========================= 결과 생성 =========================
 def create_result(results, avg_score, test_handcrafted):
     if not results or test_handcrafted is None:
@@ -192,6 +204,7 @@ def create_result(results, avg_score, test_handcrafted):
 
     avg_pressure = np.mean([r['pressure'] for r in results])
     avg_slant = np.mean([r['slant'] for r in results])
+    rescaled_score = rescale_similarity(avg_score)
 
     # 정규화된 유사도 (차이값이 작을수록 유사도 높음)
     pressure_diff = abs(avg_pressure - test_pressure)
@@ -201,6 +214,7 @@ def create_result(results, avg_score, test_handcrafted):
     print("\n" + "=" * 50)
     print("📝 최종 결과 요약")
     print(f"📌 평균 유사도: {avg_score*100:.4f}%")
+    print(f"📌 재정규화 유사도: {rescaled_score:.2f}%")
     print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim:.2f})%")
     print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim:.2f})%")
     print("=" * 50)
@@ -212,6 +226,7 @@ def create_result(results, avg_score, test_handcrafted):
         'slant': avg_slant,
         'slant_similarity': slant_sim
     }
+
 
 # ========================= 전체 실행 =========================
 if __name__ == "__main__":
@@ -254,7 +269,7 @@ if __name__ == "__main__":
         print(f"✔️ 비교한 이미지 수: {len(similarity_scores)}")
         print("#" * 50)
 
-        threshold = 0.5
+        threshold = 0.8
         if avg_score >= threshold:
             print(f"✅ 판별 결과: 같은 사람입니다 (유사도 ≥ {threshold})")
         else:
