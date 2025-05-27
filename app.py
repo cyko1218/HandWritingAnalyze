@@ -179,29 +179,38 @@ def get_similarity(model, image1_path, image2_path):
     pressure = (hand1[0] + hand2[0]) / 2
     slant = (hand1[1] + hand2[1]) / 2
 
-    return similarity, pressure, slant
+    return similarity, pressure, slant, hand2
 
 # ========================= 결과 생성 =========================
-def create_result(results, avg_score):
-    if not results:
+def create_result(results, avg_score, test_handcrafted):
+    if not results or test_handcrafted is None:
         print("❌ 비교할 결과 없음")
         return None
 
-    best_result = results[0]
-    avg_pressure = best_result.get('pressure', 0.0)
-    avg_slant = best_result.get('slant', 0.0)
+    test_pressure = test_handcrafted[0]
+    test_slant = test_handcrafted[1]
 
+    avg_pressure = np.mean([r['pressure'] for r in results])
+    avg_slant = np.mean([r['slant'] for r in results])
+
+    # 정규화된 유사도 (차이값이 작을수록 유사도 높음)
+    pressure_diff = abs(avg_pressure - test_pressure)
+    slant_diff = abs(avg_slant - test_slant)
+    pressure_sim = max(0, 1 - pressure_diff) * 100
+    slant_sim = max(0, 1 - slant_diff) * 100
     print("\n" + "=" * 50)
     print("📝 최종 결과 요약")
     print(f"📌 평균 유사도: {avg_score*100:.4f}%")
-    print(f"📌 평균 필압: {avg_pressure:.4f}")
-    print(f"📌 평균 기울기: {avg_slant:.4f}")
+    print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim:.2f})%")
+    print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim:.2f})%")
     print("=" * 50)
 
     return {
         'similarity': avg_score,
         'pressure': avg_pressure,
-        'slant': avg_slant
+        'pressure_similarity': pressure_sim,
+        'slant': avg_slant,
+        'slant_similarity': slant_sim
     }
 
 # ========================= 전체 실행 =========================
@@ -213,40 +222,46 @@ if __name__ == "__main__":
     print(f"모델 로드 중: {model_path}")
     custom_objects = {'L1DistanceLayer': L1DistanceLayer, 'contrastive_loss': contrastive_loss}
     model = load_model(model_path, custom_objects=custom_objects)
-    print("모델 로드 완료")
+    print("✅ 모델 로드 완료")
 
     similarity_scores = []
+    test_handcrafted = None  # test 이미지 특징 저장용
 
     for filename in os.listdir(reference_folder):
         ref_path = os.path.join(reference_folder, filename)
         if os.path.isfile(ref_path) and filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            similarity, pressure, slant = get_similarity(model, ref_path, test_image_path)
-            if similarity is not None:
-                similarity_scores.append({
-                    'reference': filename,
-                    'similarity': similarity,
-                    'pressure': pressure,
-                    'slant': slant
-                })
+            similarity, pressure, slant, test_feat = get_similarity(model, ref_path, test_image_path)
+
+            if test_feat is None or similarity is None:
+                continue
+
+            if test_handcrafted is None:
+                test_handcrafted = test_feat  # test 이미지 특징 저장 (1회만)
+
+            similarity_scores.append({
+                'reference': filename,
+                'similarity': similarity,
+                'pressure': pressure,
+                'slant': slant
+            })
 
     similarity_scores.sort(key=lambda x: x['similarity'], reverse=True)
 
     if similarity_scores:
         avg_score = np.mean([item['similarity'] for item in similarity_scores])
         print("\n" + "#" * 50)
-        print(f"🔍 전체 평균 유사도: {avg_score:.4f}")
+        print(f"🔍 전체 평균 유사도: {avg_score * 100:.4f}%")
         print(f"✔️ 비교한 이미지 수: {len(similarity_scores)}")
         print("#" * 50)
 
         threshold = 0.5
-        print("#" * 50)
         if avg_score >= threshold:
             print(f"✅ 판별 결과: 같은 사람입니다 (유사도 ≥ {threshold})")
         else:
             print(f"❌ 판별 결과: 다른 사람입니다 (유사도 < {threshold})")
         print("#" * 50)
 
-        summary = create_result(similarity_scores, avg_score)
+        summary = create_result(similarity_scores, avg_score, test_handcrafted)
 
     else:
         print("❌ 유사도 계산에 실패했습니다.")
