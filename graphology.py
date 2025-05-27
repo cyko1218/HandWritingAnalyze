@@ -509,21 +509,21 @@ class HandwritingAnalyzer:
 
         # 필압
         if '의지가 굳음' in traits['pressure']:
-            parts.append("강한 의지와 자기주장을 바탕으로 활력 있게 자신의 생각을 표현합니다")
+            parts.append("강한 의지와 자기주장을 바탕으로 활력 있게 자신의 생각을 표현합니다.")
         else:
-            parts.append("유순하고 민감하며 에너지는 다소 낮지만 주변에 조화롭게 어울립니다")
+            parts.append("유순하고 민감하며 에너지는 다소 낮지만 주변에 조화롭게 어울립니다.")
 
         # 기울기
         if '낙관적' in traits['slant']:
             parts.append("낙관적이고 진취적인 태도를 가지고 있으며")
         else:
-            parts.append("감정을 드러내는 데 소극적이고 신중하며 다소 비판적인 관점을 지닙니다")
+            parts.append("감정을 드러내는 데 소극적이고 신중하며 다소 비판적인 관점을 지닙니다.")
 
         # 글자 모양
         if '사고가 유연함' in traits['shape']:
-            parts.append("사고가 유연하고 상상력이 풍부하여 원만하고 합리적인 관계를 지향하는 경향이 있습니다")
+            parts.append("사고가 유연하고 상상력이 풍부하여 원만하고 합리적인 관계를 지향하는 경향이 있습니다.")
         else:
-            parts.append("정직하고 규범을 중시하며 단호하고 원칙적인 태도를 유지합니다")
+            parts.append("정직하고 규범을 중시하며 단호하고 원칙적인 태도를 유지합니다.")
 
         return " ".join(parts)
 
@@ -555,12 +555,29 @@ def main(image_path):
     print(result["personality"]["type"])
 
     print("\n특성 카테고리:")
+    category_display = {
+        'size': {'small': '작음', 'large': '큼'},
+        'pressure': {'strong': '강함', 'weak': '약함'},
+        'slant': {'rightward': '우상향', 'leftward': '우하향'},
+        'shape': {'round': '둥글다', 'angular': '각지다'}
+    }
     for feature, category in result["personality"]["categories"].items():
-        print(f"{feature}: {category}")
+        display = category_display.get(feature, {}).get(category, category)
+        print(f"{feature}: {display}")
 
     print("\n성격 특성:")
-    for feature, traits in result["personality"]["traits"].items():
-        print(f"{feature}: {traits}")
+    category_display = {
+        'size': {'small': '작음', 'large': '큼'},
+        'pressure': {'strong': '강함', 'weak': '약함'},
+        'slant': {'rightward': '우상향', 'leftward': '우하향'},
+        'shape': {'round': '둥글다', 'angular': '각지다'}
+    }
+
+    for feature in ['size', 'pressure', 'slant', 'shape']:
+        category = result["personality"]["categories"][feature]
+        label = category_display[feature][category]
+        trait = result["personality"]["traits"][feature]
+        print(f"{label}: {trait}")
 
     print("\n성격 요약:")
     print(result["personality"]["summary"])
