@@ -215,8 +215,8 @@ def create_result(results, avg_score, test_handcrafted):
     print("📝 최종 결과 요약")
     print(f"📌 평균 유사도: {avg_score*100:.4f}%")
     print(f"📌 재정규화 유사도: {rescaled_score:.2f}%")
-    print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim:.2f})%")
-    print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim:.2f})%")
+    print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim*avg_score:.2f})%")
+    print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim*avg_score:.2f})%")
     print("=" * 50)
 
     return {
