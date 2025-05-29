@@ -209,14 +209,14 @@ def create_result(results, avg_score, test_handcrafted):
     # 정규화된 유사도 (차이값이 작을수록 유사도 높음)
     pressure_diff = abs(avg_pressure - test_pressure)
     slant_diff = abs(avg_slant - test_slant)
-    pressure_sim = max(0, 1 - pressure_diff) * 100
-    slant_sim = max(0, 1 - slant_diff) * 100
+    pressure_sim = max(0, 1 - pressure_diff) * 100*avg_score
+    slant_sim = max(0, 1 - slant_diff) * 100*avg_score
     print("\n" + "=" * 50)
     print("📝 최종 결과 요약")
     print(f"📌 평균 유사도: {avg_score*100:.4f}%")
     print(f"📌 재정규화 유사도: {rescaled_score:.2f}%")
-    print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim*avg_score:.2f})%")
-    print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim*avg_score:.2f})%")
+    print(f"📌 평균 필압: {avg_pressure:.4f} (유사도: {pressure_sim:.2f})%")
+    print(f"📌 평균 기울기: {avg_slant:.4f} (유사도: {slant_sim:.2f})%")
     print("=" * 50)
 
     return {
@@ -232,12 +232,21 @@ def create_result(results, avg_score, test_handcrafted):
 if __name__ == "__main__":
     model_path = "handwriting_hybrid_model_1.keras"
     reference_folder = "/Users/chanyoungko/Desktop/HandWriting/reference_samples"
-    test_image_path = "/Users/chanyoungko/Desktop/HandWriting/test_samples/img.png"
+    test_image_path = "/Users/chanyoungko/Desktop/HandWriting/test_samples/img_2.png"
 
     print(f"모델 로드 중: {model_path}")
     custom_objects = {'L1DistanceLayer': L1DistanceLayer, 'contrastive_loss': contrastive_loss}
     model = load_model(model_path, custom_objects=custom_objects)
     print("✅ 모델 로드 완료")
+    # ✅ 테스트 이미지에서 글씨 유무 확인
+    test_img_cv = cv2.imread(test_image_path)
+    if test_img_cv is None:
+        print(f"❌ 테스트 이미지 로드 실패: {test_image_path}")
+        exit()
+
+    if not is_handwriting_image(test_img_cv):
+        print("⚠️ 테스트 이미지에 글씨가 감지되지 않았습니다. 프로그램을 종료합니다.")
+        exit()
 
     similarity_scores = []
     test_handcrafted = None  # test 이미지 특징 저장용
