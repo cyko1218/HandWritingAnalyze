@@ -6,7 +6,7 @@ from matplotlib.patches import Rectangle
 from skimage.feature import graycomatrix, graycoprops
 from PIL import Image
 import pandas as pd
-
+import pytesseract
 
 def set_korean_font():
     """한글 폰트 설정 함수"""
@@ -476,7 +476,7 @@ class HandwritingAnalyzer:
 
         # ✅ 글씨 유무 검사
         try:
-            check_handwriting_presence(processed_images['binary'])
+            check_handwriting_presence_with_ocr(processed_images['binary'])
         except ValueError as e:
             return {"error": str(e)}
 
@@ -533,24 +533,31 @@ class HandwritingAnalyzer:
 
         return " ".join(parts)
 
-def check_handwriting_presence(binary_image, min_contours=3, min_area=30):
+def check_handwriting_presence_with_ocr(image, min_text_length=3):
     """
-    이진화된 이미지에서 글씨가 있는지 판단하는 함수.
-    일정 수 이상의 유의미한 윤곽선이 있어야 글씨가 있다고 판단.
+    OCR을 통해 이미지에 실제 텍스트(글씨)가 존재하는지 판단합니다.
 
     Args:
-        binary_image (np.ndarray): 이진화된 이미지 (흰 배경 + 검은 글씨 형태)
-        min_contours (int): 글씨로 판단하기 위한 최소 윤곽선 수
-        min_area (int): 윤곽선의 최소 면적 (노이즈 제거 목적)
+        image (np.ndarray): 원본 이미지 또는 전처리 이미지 (BGR 또는 Grayscale 가능)
+        min_text_length (int): 글자로 판단할 최소 텍스트 길이
 
     Raises:
-        ValueError: 글씨가 없다고 판단되면 예외 발생
+        ValueError: 글자가 없다고 판단될 경우
     """
-    contours, _ = cv2.findContours(binary_image.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+    # 흑백으로 변환 (Tesseract는 RGB 또는 Grayscale 사용 가능)
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
 
-    if len(valid_contours) < min_contours:
-        raise ValueError("이미지에서 글씨를 감지할 수 없습니다. 글씨가 없는 이미지일 수 있습니다.")
+    # OCR 수행
+    text = pytesseract.image_to_string(gray, lang='kor+eng')  # 한국어와 영어 모두 인식
+
+    # 텍스트 길이 기준으로 판단
+    if len(text.strip()) < min_text_length:
+        raise ValueError("OCR 분석 결과 글씨가 감지되지 않았습니다.")
+
+    print(f"OCR 감지 텍스트: {text.strip()}")
 
 # 앱 사용 예시
 def main(image_path):
